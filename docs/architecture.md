@@ -2,7 +2,7 @@
 
 ## Purpose and limits
 
-This is a learning build. It is designed to exercise every technology in the brief in a realistic way, and to be finishable by one person working part time over a few weeks. It is not production hardened: there is no multi-region setup, no compliance work, and no user authentication beyond a shared API key.
+This is a learning build. It is designed to exercise every technology in the brief in a realistic way, and to be finishable by one person working part time over a few weeks. It is not production hardened: there is no multi-region setup and no compliance work. Authentication is real but small: one Cognito user pool, two roles, and no single sign-on with a corporate directory.
 
 It uses real external systems: a DocuSign developer sandbox, a Salesforce Developer Edition org, and a real AWS account.
 
@@ -21,6 +21,7 @@ flowchart LR
         SIGN[Signing Service<br/>Nest Lambda consumer + webhook]
         VAULT[Vault Service<br/>Nest Lambda consumer]
         NOTE[Notifier<br/>Nest microservice on Fargate]
+        IDP[Cognito user pool]
     end
 
     subgraph Confluent Cloud
@@ -43,7 +44,11 @@ flowchart LR
     NOTE -- status update --> SF
     NOTE -- signed webhooks --> SUB
     UI -- download --> VAULT
+    UI -- sign in --> IDP
+    SF -- client credentials --> IDP
 ```
+
+Every call into the API Gateway carries a token issued by the user pool. See [authentication and authorisation](#authentication-and-authorisation).
 
 ## The apps
 
@@ -137,7 +142,53 @@ All HTTP routes sit on one API Gateway. Each service owns its routes:
 | `GET /agreements/{id}/documents/{kind}/download` | Vault Service |
 | `POST /webhook-subscriptions`, `GET /webhook-subscriptions`, `POST /webhook-deliveries/{id}/replay` | Notifier |
 
-All routes except the DocuSign webhook require the shared API key. The DocuSign webhook is authenticated by HMAC signature.
+The gateway is an API Gateway HTTP API, because that type has a built-in JWT authorizer.
+
+### Authentication and authorisation
+
+There is no shared API key. Every caller proves who it is with a short-lived access token from one Cognito user pool. The DocuSign webhook is the one exception: it is authenticated by HMAC signature and has no authorizer.
+
+**Callers**
+
+| Caller | App client | OAuth flow | Holds a secret |
+|---|---|---|---|
+| Dashboard user | `dashboard` (public) | Authorization code with PKCE | No |
+| Salesforce Flow | `salesforce` (confidential) | Client credentials | Yes, in a Salesforce External Credential |
+| Smoke test | `smoke-test` (confidential) | Client credentials | Yes, in a GitHub environment secret |
+
+Each caller has its own client, so one can be revoked or rotated without touching the others.
+
+**Two checks on every request**
+
+1. *Authentication, at the gateway.* The JWT authorizer checks the token's signature, issuer, expiry, and client ID against the user pool. A missing or invalid token gets `401` and no Lambda is invoked.
+2. *Authorisation, in the service.* A guard in the shared package reads the verified claims and checks them against the permission the route needs. A valid token without that permission gets `403`. The guard also adds the caller's subject and client ID to the current span.
+
+**Permissions**
+
+A user's permissions come from their Cognito group, in the `cognito:groups` claim. A machine's permissions come from the scopes granted to its app client, in the `scope` claim. The scopes are defined on a Cognito resource server named `signing-api`.
+
+| Route | Permission | `viewer` | `operator` | `salesforce` | `smoke-test` |
+|---|---|---|---|---|---|
+| `POST /agreements` | `agreements.write` | | yes | yes | yes |
+| `GET /agreements`, `GET /agreements/{id}` | `agreements.read` | yes | yes | | yes |
+| `GET /agreements/{id}/documents/{kind}/download` | `documents.download` | yes | yes | | |
+| `GET /webhook-subscriptions` | `webhooks.read` | yes | yes | | |
+| `POST /webhook-subscriptions`, `POST /webhook-deliveries/{id}/replay` | `webhooks.manage` | | yes | | |
+
+The mapping from group to permissions lives in one file in the shared package. Routes declare the permission they need, never a group name, so adding a role later changes one file.
+
+**User pool settings**
+
+| Setting | Value |
+|---|---|
+| Self sign-up | Off; users are created by an administrator |
+| Sign-in | Email and password through Cognito managed login |
+| MFA | Required, TOTP authenticator app |
+| Access token lifetime | 60 minutes |
+| Refresh token lifetime | 8 hours, rotated on use (dashboard client only) |
+| Groups | `viewer`, `operator` |
+
+Disabling a user or deleting an app client stops new tokens at once. Tokens already issued stay valid until they expire, which is why the access token lifetime is short.
 
 ### External systems sit behind adapters
 
@@ -152,6 +203,7 @@ DocuSign and Salesforce are each called through one adapter interface. Unit test
 | Schema registry | Confluent Cloud Schema Registry | See the [event catalogue](event-catalogue.md) |
 | Kafka client | `kafkajs` | NestJS's Kafka transport is built on it; pure JavaScript, so Lambda packaging stays simple |
 | Stages | personal dev, `demo` | Dev is deployed from a laptop in SST live mode; `demo` is deployed only by the pipeline |
+| Identity | Amazon Cognito user pool, one per stage | Declared in SST with its app clients, groups, and resource server; users are created by hand |
 | Secrets | SST secrets per stage | DocuSign, Salesforce, and Kafka credentials; never in the repo |
 | Monorepo tooling | pnpm workspaces, Vitest | |
 
@@ -162,6 +214,7 @@ Checked November 2026. The Confluent and Grafana figures come partly from third-
 - **Confluent Cloud**: the entry cluster tier has no base charge and bills for data in, data out, and storage, all negligible at this volume. New accounts get trial credit. Schema Registry's Essentials package has no base charge and includes 100 free schemas according to Confluent's documentation. Sources disagree on how many partitions the entry tier includes, so topics use 3 partitions each.
 - **Grafana Cloud**: the free plan is reported as about 10,000 active metric series, 50 GB of logs and 50 GB of traces per month, 14-day retention, and 3 users.
 - **AWS**: Lambda, API Gateway, DynamoDB, and S3 are free or close to it at this scale. The Notifier's Fargate task is the one always-on cost; stop it when not in use.
+- **Cognito**: a handful of dashboard users falls inside the free allowance. Machine-to-machine clients are billed separately and are not covered by it: recalled, not checked, as about $6 per month per app client that uses client credentials, plus a small charge per token request. With two machine clients per stage that is the second always-on cost. Confirm on the Cognito pricing page; if it matters, delete the machine clients on the dev stage when not in use.
 
 ## Testing
 
@@ -180,3 +233,7 @@ These were assumed in the design and not confirmed against current documentation
 - That the Confluent provider can be used from SST for topic creation with the entry-tier cluster's API keys.
 - Whether the smoke test can complete an envelope in the DocuSign sandbox without a person signing. If it cannot, the automated smoke test stops at `SENT` and the signing and vaulting stages are checked by hand.
 - Whether DocuSign's HMAC key can be set per envelope or only on an account-level Connect configuration.
+- That the HTTP API JWT authorizer accepts Cognito access tokens from all three app clients when their client IDs are listed as audiences (access tokens carry `client_id`, not `aud`).
+- That a Salesforce External Credential can run the client credentials flow against Cognito's token endpoint, including how it sends the client secret and the requested scope.
+- That refresh token rotation is available on the user pool's feature tier, and that `oidc-client-ts` renews correctly with it.
+- That SST's Cognito component can declare the resource server, scopes, and groups, or whether some need the underlying Pulumi resources.

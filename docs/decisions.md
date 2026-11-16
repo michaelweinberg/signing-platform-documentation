@@ -1,6 +1,6 @@
 # Decisions
 
-Each entry records what was chosen, what was rejected, and why. All were settled on 2026-11-16.
+Each entry records what was chosen, what was rejected, and why. All were settled on 2026-11-16; decisions 39 to 43 were added later the same day and revise decision 14.
 
 ## Scope
 
@@ -24,7 +24,7 @@ Each entry records what was chosen, what was rejected, and why. All were settled
 | 11 | PDFs rendered with `@react-pdf/renderer` | Headless Chromium on Lambda; DocuSign templates | No browser binary to package; generation stays our own service |
 | 12 | The Notifier also sends outbound HMAC-signed webhooks | Inbound webhooks only | Receiving and delivering webhooks are different skills |
 | 13 | One SST monorepo for all apps | One repo per app | One deploy, one home for event contracts, less overhead for one person |
-| 14 | Dashboard has a create form and a shared API key | Cognito and roles | The form allows demos without Salesforce; real auth is a distraction here |
+| 14 | Dashboard has a create form | Salesforce as the only way in | The form allows demos without Salesforce. The shared API key first chosen here was replaced; see decisions 39 to 43 |
 
 ## Messaging and data
 
@@ -64,6 +64,18 @@ Each entry records what was chosen, what was rejected, and why. All were settled
 | 36 | Schema compatibility checked on pull requests; schemas registered before deploy | Checking at deploy only | A breaking change is caught before merge |
 | 37 | Kafka topics declared in SST; the cluster created by hand | Topics created by hand | Topics version with the code that uses them |
 | 38 | Smoke test after deploy; fix forward on failure | Automatic rollback; manual approval | Rollback across Lambdas, schemas, and topics is hard to do correctly at this scale |
+
+## Authentication
+
+These replace the shared API key from the original decision 14.
+
+| # | Decision | Rejected | Why |
+|---|---|---|---|
+| 39 | Dashboard users sign in through a Cognito user pool, with the authorization code flow and PKCE | A shared API key in local storage; a login form and password table of our own | A shared key identifies nobody, cannot be revoked for one person, and never expires. Cognito is already in the AWS account and SST declares it; building password storage teaches the wrong lesson |
+| 40 | Cognito managed login, MFA required, no self sign-up | A custom sign-in screen calling Cognito directly | The dashboard never handles a password, and the redirect flow is the one a corporate identity provider would use later |
+| 41 | Tokens are checked by API Gateway's JWT authorizer; permissions are checked by a guard in the shared package | A custom Lambda authorizer; checking tokens inside each service | The gateway rejects bad tokens before any Lambda runs and needs no code. Group rules are too fine for the authorizer, so they sit in one shared guard |
+| 42 | Two roles, `viewer` and `operator`, as Cognito groups mapped to named permissions | No roles; per-agreement ownership | Enough to exercise role checks end to end. Ownership would need a user ID in the events and the read model |
+| 43 | Salesforce and the smoke test use the client credentials flow, each with its own app client and scopes | Keeping the API key for machine callers; a shared service user with a password | One authorizer covers every route, each caller can be revoked alone, and Salesforce is limited to creating agreements. Cost: machine clients are billed monthly |
 
 ## Design choices made while writing the specs
 
