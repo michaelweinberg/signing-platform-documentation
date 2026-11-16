@@ -49,13 +49,13 @@ A scheduler inside the process queries for due deliveries every 30 seconds. Beca
 
 ### HTTP routes
 
-All require the shared API key.
+All require a Cognito access token. See [authentication and authorisation](../architecture.md#authentication-and-authorisation).
 
-| Route | Behaviour |
-|---|---|
-| `POST /webhook-subscriptions` | Registers a URL and an event filter; returns the signing secret once |
-| `GET /webhook-subscriptions` | Lists subscriptions and recent delivery counts |
-| `POST /webhook-deliveries/{id}/replay` | Resets a `FAILED` delivery so the scheduler attempts it again |
+| Route | Permission | Behaviour |
+|---|---|---|
+| `POST /webhook-subscriptions` | `webhooks.manage` | Registers a URL and an event filter; returns the signing secret once |
+| `GET /webhook-subscriptions` | `webhooks.read` | Lists subscriptions and recent delivery counts |
+| `POST /webhook-deliveries/{id}/replay` | `webhooks.manage` | Resets a `FAILED` delivery so the scheduler attempts it again |
 
 ## Data
 
@@ -86,4 +86,5 @@ Salesforce setup needed: the two custom fields on Opportunity, a connected app w
 - A subscriber that returns `500` is retried on the backoff schedule, and the delivery is marked `FAILED` after the last attempt.
 - Restarting the task mid-retry loses no delivery.
 - Replaying a failed delivery after the subscriber recovers succeeds.
+- A viewer's token can list subscriptions but gets `403` on registering one or replaying a delivery.
 - Stopping and restarting the task resumes from committed offsets with no skipped events and no duplicate Salesforce updates.

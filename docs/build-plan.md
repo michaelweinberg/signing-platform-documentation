@@ -4,8 +4,8 @@ Nine steps. Each ends with something you can demonstrate, and each introduces on
 
 | Step | Builds | Introduces |
 |---|---|---|
-| 1 | Foundation | SST, Kafka, schema registry, Avro, OpenTelemetry, GitHub Actions |
-| 2 | Agreement API and create form | NestJS on Lambda, API Gateway, DynamoDB, the outbox, React |
+| 1 | Foundation | SST, Kafka, schema registry, Avro, OpenTelemetry, GitHub Actions, Cognito |
+| 2 | Agreement API and create form | NestJS on Lambda, API Gateway, DynamoDB, the outbox, React, OAuth sign-in with PKCE |
 | 3 | Document Generator | Lambda Kafka consumers, idempotency, dead-lettering, S3 |
 | 4 | Signing Service | DocuSign, inbound webhooks |
 | 5 | Vault Service | S3 Object Lock, presigned URLs |
@@ -21,19 +21,20 @@ Set up everything the apps share, and prove the pipeline with an almost empty st
 - Create the `signing-platform-apps` monorepo with pnpm workspaces, TypeScript, and Vitest.
 - Create accounts: Confluent Cloud (cluster and schema registry), Grafana Cloud, DocuSign developer, Salesforce Developer Edition.
 - Write the SST config with the shared API Gateway and the four Kafka topics.
+- Add the Cognito user pool to the SST config: the three app clients, the `signing-api` resource server and its scopes, the two groups, and the JWT authorizer on the gateway. Write the permission guard in the shared package. See [authentication and authorisation](architecture.md#authentication-and-authorisation). Like tracing, this is far easier to have from the first route than to retrofit.
 - Write the shared package: the `.avsc` files, type generation, Avro encode and decode with the registry client, the outbox writer and relay, the idempotent consumer wrapper, the logger, and OpenTelemetry setup including trace context in the outbox and Kafka headers.
 - Write the Docker Compose file for local Kafka, schema registry, DynamoDB Local, and Grafana.
 - Set up the AWS OIDC role and both GitHub Actions workflows. See [CI/CD](ci-cd.md).
 
-**Done when:** a merge to `main` deploys the `demo` stage; the topics and schema subjects exist; a throwaway Lambda publishes one Avro event through the outbox and its trace appears in Grafana, crossing the outbox hop unbroken.
+**Done when:** a merge to `main` deploys the `demo` stage; the topics and schema subjects exist; a throwaway Lambda publishes one Avro event through the outbox and its trace appears in Grafana, crossing the outbox hop unbroken; a throwaway route returns `401` without a token and `200` with one fetched by the `smoke-test` client.
 
 ## Step 2: Agreement API and create form
 
 Spec: [Agreement API](apps/agreement-api.md), [Dashboard](apps/dashboard.md).
 
-Build the write side only: `POST /agreements`, the agreements table, and the outbox relay. Build the dashboard's create form. Leave the read model for step 6; `GET` routes can return data from the agreements table for now.
+Build the write side only: `POST /agreements`, the agreements table, and the outbox relay. Build the dashboard's sign-in first, then its create form. Create one `operator` and one `viewer` user by hand. Leave the read model for step 6; `GET` routes can return data from the agreements table for now.
 
-**Done when:** submitting the form puts an `AgreementRequested` event on the topic, and a repeated idempotency key produces no second event.
+**Done when:** opening the dashboard redirects to Cognito sign-in; the viewer's token gets `403` on `POST /agreements`; submitting the form as the operator puts an `AgreementRequested` event on the topic, and a repeated idempotency key produces no second event.
 
 ## Step 3: Document Generator
 
@@ -79,7 +80,7 @@ Build outbound webhooks first and leave Salesforce write-back for step 8. Use a 
 
 Spec: [Agreement API](apps/agreement-api.md) (inbound), [Notifier](apps/notifier.md) (outbound).
 
-- Inbound: the Named Credential and the record-triggered Flow on Opportunity.
+- Inbound: the External Credential (client credentials flow against Cognito, using the `salesforce` app client), the Named Credential, and the record-triggered Flow on Opportunity.
 - Outbound: the custom fields, the connected app, and the write-back in the Notifier.
 
 **Done when:** moving an Opportunity to Closed Won in Salesforce leads, with no other action except signing, to `Agreement_Status__c` reading `VAULTED`.
@@ -96,5 +97,5 @@ All services now emit data. Build the two dashboards and the alert rules as JSON
 
 - Port Kafka from Confluent Cloud to AWS MSK, to learn VPC networking and IAM authentication for Kafka.
 - Embedded signing inside the dashboard.
-- Real authentication with Cognito and roles.
+- Federate the Cognito user pool with an external identity provider (for example Google or a SAML directory), so users sign in with an existing account.
 - A second contract template with a schema change, to exercise `BACKWARD` compatibility for real.

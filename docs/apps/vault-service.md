@@ -30,7 +30,7 @@ Object keys are derived from the agreement ID (`vault/<agreementId>/signed.pdf`,
 
 ### Downloading
 
-`GET /agreements/{id}/documents/{kind}/download`, where `kind` is `signed` or `certificate`. Requires the shared API key.
+`GET /agreements/{id}/documents/{kind}/download`, where `kind` is `signed` or `certificate`. Requires a Cognito access token with the `documents.download` permission, which both user groups have and no machine client has. See [authentication and authorisation](../architecture.md#authentication-and-authorisation).
 
 Returns a presigned S3 URL that expires after 5 minutes. The response also includes the recorded SHA-256 hash so the caller can verify the file.
 
@@ -65,5 +65,5 @@ None. The Signing Service has already fetched the files from DocuSign.
 - An `EnvelopeCompleted` event results in both files in the vault bucket with a retention date, and a `DocumentVaulted` event whose hashes match the files.
 - An attempt to delete a vaulted object version with the service's own role is denied.
 - The download route returns a working URL that stops working after expiry.
-- A download request without the API key is rejected.
+- A download request without a token returns `401`, and one with the `salesforce` client's token returns `403`.
 - Replaying `EnvelopeCompleted` produces no second vault record and no second event.

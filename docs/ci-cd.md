@@ -42,7 +42,7 @@ flowchart LR
 | Register schemas | Register new schema versions with the registry before any code deploys, so new code never runs against a registry that lacks its schemas |
 | Deploy | `sst deploy --stage demo`. Creates or updates Kafka topics (through the Confluent provider), all AWS resources, and the Notifier's container image |
 | Provision Grafana | Push dashboard and alert rule JSON to Grafana Cloud |
-| Smoke test | Create an agreement through the API and poll until it reaches `SENT`. A test-only step then completes the envelope in the DocuSign sandbox and the script polls until `VAULTED` |
+| Smoke test | Fetch an access token with the client credentials flow, then create an agreement through the API and poll until it reaches `SENT`. A test-only step then completes the envelope in the DocuSign sandbox and the script polls until `VAULTED` |
 
 If the smoke test fails, the run is marked failed. There is no automatic rollback and no manual approval step: a red run means `demo` is broken, and the fix is a new commit.
 
@@ -53,7 +53,7 @@ If the smoke test fails, the run is marked failed. There is no automatic rollbac
 | AWS access | None stored. GitHub Actions assumes an IAM role through OIDC federation | Deploy |
 | Confluent Cloud API key (cluster and registry admin) | GitHub environment secret | Schema registration, topic creation |
 | Grafana Cloud API token | GitHub environment secret | Dashboard provisioning |
-| Smoke test API key | GitHub environment secret | Smoke test |
+| Client ID and secret of the `smoke-test` Cognito app client | GitHub environment secret | Smoke test; exchanged for a 60-minute access token at the start of each run |
 | DocuSign, Salesforce, and runtime Kafka credentials | SST secrets, set once per stage from a laptop | The running apps only; the pipeline never sees them |
 
 ### The AWS role
